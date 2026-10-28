@@ -268,6 +268,7 @@ async def play_local_sound() -> None:
 ELEVEN_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
 ELEVEN_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
 ELEVEN_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2").strip()
+ELEVEN_LANGUAGE = os.getenv("ELEVENLABS_LANGUAGE", "th").strip()  # บังคับภาษา (ใช้ได้กับโมเดล v2.5 ขึ้นไป)
 ELEVEN_ENABLED = bool(ELEVEN_API_KEY and ELEVEN_VOICE_ID)
 TTS_CACHE_DIR = BASE / "tts_cache"
 
@@ -301,6 +302,9 @@ async def eleven_tts_pcm(text: str) -> bytes | None:
         "model_id": ELEVEN_MODEL,
         "voice_settings": {"stability": 0.5, "similarity_boost": 0.75, "speed": 1.0},
     }
+    # language_code บังคับให้อ่านเป็นภาษาไทย รองรับเฉพาะโมเดล turbo/flash v2.5 ขึ้นไป (v2 ธรรมดาจะตรวจจากตัวอักษรเอง)
+    if ELEVEN_LANGUAGE and ("v2_5" in ELEVEN_MODEL or "v3" in ELEVEN_MODEL):
+        payload["language_code"] = ELEVEN_LANGUAGE
     headers = {"xi-api-key": ELEVEN_API_KEY, "Content-Type": "application/json", "Accept": "audio/pcm"}
     try:
         async with aiohttp.ClientSession() as session:
@@ -535,7 +539,11 @@ async def say(inter: discord.Interaction, text: app_commands.Range[str, 1, 300])
         return
     await inter.response.defer(ephemeral=True, thinking=True)
     await play_voice_alert(inter.guild, conf["voice_channel_id"], text)
-    await inter.followup.send(f"🗣️ พูดใน {ch.mention} แล้ว: {text}", ephemeral=True)
+    await inter.followup.send(
+        f"🗣️ พูดใน {ch.mention} แล้ว: {text}\n-# ElevenLabs voice `{ELEVEN_VOICE_ID}` • model `{ELEVEN_MODEL}`"
+        + (f" • language `{ELEVEN_LANGUAGE}`" if ("v2_5" in ELEVEN_MODEL or "v3" in ELEVEN_MODEL) else ""),
+        ephemeral=True,
+    )
 
 
 @ro.command(name="tts", description="เปิด/ปิดข้อความอ่านออกเสียง (TTS) ตอนแจ้งเตือน")
@@ -546,7 +554,9 @@ async def tts(inter: discord.Interaction) -> None:
     settings.save()
     state = "เปิด 🔊" if conf["tts"] else "ปิด 🔇"
     await inter.response.send_message(
-        f"{state} TTS แล้ว (ผู้ฟังต้องเปิด Text-to-Speech ใน Discord: Settings > Accessibility > Allow playback)",
+        f"{state} TTS ของ Discord แล้ว\n"
+        "ℹ️ TTS นี้ใช้เสียงอ่านของเครื่องผู้ฟังแต่ละคน (ส่วนใหญ่เป็นเสียงอังกฤษ อ่านไทยไม่ชัด) "
+        "ถ้าต้องการเสียงพูดไทยให้ใช้ ElevenLabs ผ่านห้องเสียงด้วย `/ro setvoice` แทน",
         ephemeral=True,
     )
 
