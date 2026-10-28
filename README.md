@@ -90,3 +90,16 @@ python bot.py
 6. ดู **Deploy Logs** จนเห็นข้อความ `ล็อกอินเป็น ...` แล้วไปพิมพ์ `/ro setchannel` ใน Discord
 
 ทางเลือกไม่ใช้ GitHub: ติดตั้ง Railway CLI บนเครื่องแล้วรัน `railway login`, `railway init`, `railway up` ในโฟลเดอร์นี้
+
+## ทางเลือกอื่นถ้าใช้ Railway ไม่ได้
+บอทมี health endpoint ในตัว (เปิดอัตโนมัติเมื่อโฮสต์ตั้งตัวแปร `PORT`) จึงรันบนโฮสต์แบบ Web Service ได้
+
+**Render (ฟรี)** มีไฟล์ `render.yaml` ให้แล้ว
+1. https://render.com → New → **Blueprint** → เลือก repo นี้ → ใส่ `DISCORD_TOKEN`
+2. แผนฟรีจะหลับเมื่อไม่มีคนเรียก 15 นาที ให้ตั้ง https://uptimerobot.com หรือ https://cron-job.org
+   ยิง URL ของ service (เช่น `https://ronewworld-bot.onrender.com/health`) ทุก 5 นาที
+3. ค่าที่ตั้งด้วย `/ro setchannel` จะหายเมื่อ redeploy (ดิสก์ฟรีไม่ถาวร) ให้พิมพ์ตั้งใหม่หลัง deploy
+
+**Koyeb (ฟรี)** New Service → GitHub → repo นี้ → Run command `python bot.py` → ใส่ `DISCORD_TOKEN` → Port 8000
+
+**VPS / Oracle Cloud Free Tier** ใช้ `Dockerfile` หรือรัน `python bot.py` ใน `screen`/`systemd` เสถียรที่สุด

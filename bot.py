@@ -224,6 +224,29 @@ async def reminder_loop() -> None:
         sent_keys.clear()
 
 
+async def start_health_server() -> None:
+    """เปิด HTTP endpoint เล็กๆ เมื่อมีตัวแปร PORT (โฮสต์อย่าง Render/Koyeb ต้องการ)"""
+    port = os.getenv("PORT")
+    if not port:
+        return
+    from aiohttp import web  # มากับ discord.py อยู่แล้ว
+
+    async def ok(_: web.Request) -> web.Response:
+        return web.Response(text=f"ok • {bot.user} • {schedule.now():%Y-%m-%d %H:%M}")
+
+    app = web.Application()
+    app.add_routes([web.get("/", ok), web.get("/health", ok)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", int(port)).start()
+    log.info("health server เปิดที่พอร์ต %s", port)
+
+
+@bot.event
+async def setup_hook() -> None:
+    await start_health_server()
+
+
 @reminder_loop.before_loop
 async def _wait_ready() -> None:
     await bot.wait_until_ready()
