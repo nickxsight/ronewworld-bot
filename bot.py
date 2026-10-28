@@ -56,6 +56,7 @@ class Event:
     duration_min: int = 0
     remind_before: list[int] = field(default_factory=list)
     note: str = ""
+    speech: str = ""
 
     def occurrences_on(self, day: datetime) -> list[datetime]:
         """คืนเวลาเริ่มทั้งหมดของกิจกรรมในวันที่กำหนด (timezone-aware)"""
@@ -116,6 +117,7 @@ class Schedule:
                     duration_min=int(e.get("duration_min", 0)),
                     remind_before=sorted(set(int(x) for x in e.get("remind_before", default_before)), reverse=True),
                     note=e.get("note", ""),
+                    speech=e.get("speech", ""),
                 )
             )
         self.events = events
@@ -262,7 +264,83 @@ async def play_local_sound() -> None:
         log.debug("เล่นเสียงบนเครื่องไม่ได้: %s", exc)
 
 
-async def play_voice_alert(guild: discord.Guild, voice_channel_id: int) -> None:
+# ---------------------------------------------------------------- ElevenLabs (เสียงพูด)
+ELEVEN_API_KEY = os.getenv("ELEVENLABS_API_KEY", "").strip()
+ELEVEN_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+ELEVEN_MODEL = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2").strip()
+ELEVEN_ENABLED = bool(ELEVEN_API_KEY and ELEVEN_VOICE_ID)
+TTS_CACHE_DIR = BASE / "tts_cache"
+
+
+def _pcm24k_mono_to_48k_stereo(raw: bytes) -> bytes:
+    """ElevenLabs ส่ง PCM 24kHz mono มา แปลงเป็น 48kHz stereo ที่ Discord ต้องการ (ไม่ใช้ ffmpeg)"""
+    n = len(raw) // 2
+    samples = struct.unpack(f"<{n}h", raw[: n * 2])
+    out = bytearray()
+    for v in samples:
+        frame = struct.pack("<hh", v, v)
+        out += frame + frame  # ทำซ้ำ 2 เท่า = 24k -> 48k
+    return bytes(out)
+
+
+async def eleven_tts_pcm(text: str) -> bytes | None:
+    """ขอเสียงพูดจาก ElevenLabs คืนค่าเป็น PCM 48kHz stereo (แคชไว้ในโฟลเดอร์ tts_cache)"""
+    if not ELEVEN_ENABLED:
+        return None
+    import hashlib
+
+    import aiohttp
+
+    key = hashlib.sha1(f"{ELEVEN_VOICE_ID}|{ELEVEN_MODEL}|{text}".encode("utf-8")).hexdigest()
+    cache_file = TTS_CACHE_DIR / f"{key}.pcm"
+    if cache_file.exists():
+        return cache_file.read_bytes()
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVEN_VOICE_ID}?output_format=pcm_24000"
+    payload = {
+        "text": text,
+        "model_id": ELEVEN_MODEL,
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75, "speed": 1.0},
+    }
+    headers = {"xi-api-key": ELEVEN_API_KEY, "Content-Type": "application/json", "Accept": "audio/pcm"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    body = (await resp.text())[:300]
+                    log.warning("ElevenLabs ตอบ %s: %s", resp.status, body)
+                    return None
+                raw = await resp.read()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("เรียก ElevenLabs ไม่สำเร็จ: %s", exc)
+        return None
+    pcm = _pcm24k_mono_to_48k_stereo(raw)
+    try:
+        TTS_CACHE_DIR.mkdir(exist_ok=True)
+        cache_file.write_bytes(pcm)
+    except OSError:
+        pass
+    log.info("ElevenLabs สร้างเสียง %d ตัวอักษร (%.1f วิ)", len(text), len(pcm) / (48000 * 4))
+    return pcm
+
+
+def speech_text(ev: Event, minutes_left: int) -> str:
+    """ข้อความที่จะให้พูด ตั้งเองต่อกิจกรรมได้ด้วยช่อง "speech" ใน events.json (ใช้ {minutes} แทนจำนวนนาที)"""
+    if ev.speech and minutes_left > 0:
+        return ev.speech.replace("{minutes}", str(minutes_left))
+    if minutes_left <= 0:
+        return f"กิจกรรม {ev.name} เริ่มแล้ว"
+    return f"อีก {minutes_left} นาที กิจกรรม {ev.name} จะเริ่ม เตรียมตัวได้เลย"
+
+
+async def _play_and_wait(vc: discord.VoiceClient, source: discord.AudioSource, timeout: float = 60) -> None:
+    if vc.is_playing():
+        vc.stop()
+    done = asyncio.Event()
+    vc.play(source, after=lambda _e: bot.loop.call_soon_threadsafe(done.set))
+    await asyncio.wait_for(done.wait(), timeout=timeout)
+
+
+async def play_voice_alert(guild: discord.Guild, voice_channel_id: int, speech: str | None = None) -> None:
     """เข้าห้องเสียง เล่นเสียงเตือน แล้วออก"""
     ch = guild.get_channel(voice_channel_id)
     if not isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
@@ -285,9 +363,13 @@ async def play_voice_alert(guild: discord.Guild, voice_channel_id: int) -> None:
             await vc.move_to(ch)
         if vc.is_playing():
             vc.stop()
-        done = asyncio.Event()
-        vc.play(_voice_source(), after=lambda _e: bot.loop.call_soon_threadsafe(done.set))
-        await asyncio.wait_for(done.wait(), timeout=30)
+        pcm = await eleven_tts_pcm(speech) if speech else None
+        if pcm:
+            await _play_and_wait(vc, discord.PCMAudio(io.BytesIO(_TONE_CACHE[: 48000 * 4 // 2])), timeout=10)  # ติ๊ดสั้น 0.5 วิ
+            await asyncio.sleep(0.3)
+            await _play_and_wait(vc, discord.PCMAudio(io.BytesIO(pcm)))
+        else:
+            await _play_and_wait(vc, _voice_source(), timeout=30)
         await asyncio.sleep(0.5)
     except Exception as exc:  # noqa: BLE001
         log.warning("เล่นเสียงในห้องเสียง %s ไม่ได้: %s", ch.name, exc)
@@ -343,7 +425,7 @@ async def reminder_loop() -> None:
                     continue
                 await play_local_sound()
                 if conf.get("voice_channel_id"):
-                    asyncio.create_task(play_voice_alert(guild, conf["voice_channel_id"]))
+                    asyncio.create_task(play_voice_alert(guild, conf["voice_channel_id"], speech_text(ev, before)))
     # ล้าง key เก่าไม่ให้โตไม่สิ้นสุด
     if len(sent_keys) > 5000:
         sent_keys.clear()
@@ -380,6 +462,7 @@ async def _wait_ready() -> None:
 @bot.event
 async def on_ready() -> None:
     log.info("ล็อกอินเป็น %s (%s)", bot.user, bot.user.id)
+    log.info("ElevenLabs: %s", f"เปิดใช้ (voice {ELEVEN_VOICE_ID}, model {ELEVEN_MODEL})" if ELEVEN_ENABLED else "ปิด (ไม่มี API key/voice id)")
     try:
         if DEV_GUILD_ID:
             g = discord.Object(id=int(DEV_GUILD_ID))
@@ -426,10 +509,33 @@ async def setvoice(inter: discord.Interaction, channel: discord.VoiceChannel | N
     if channel:
         perms = channel.permissions_for(inter.guild.me)
         warn = "" if (perms.connect and perms.speak) else "\n⚠️ บอทยังไม่มีสิทธิ์ Connect/Speak ในห้องนี้"
-        msg = f"✅ จะเข้า {channel.mention} เพื่อเล่นเสียงเตือน (เฉพาะตอนมีคนอยู่ในห้อง){warn}"
+        voice_kind = "พูดด้วยเสียง ElevenLabs" if ELEVEN_ENABLED else "เล่นเสียงติ๊ด (ตั้งค่า ElevenLabs ใน .env เพื่อให้พูดได้)"
+        msg = f"✅ จะเข้า {channel.mention} เพื่อ{voice_kind} เฉพาะตอนมีคนอยู่ในห้อง{warn}"
     else:
         msg = "✅ ยกเลิกเสียงเตือนในห้องเสียงแล้ว"
     await inter.response.send_message(msg, ephemeral=True)
+
+
+@ro.command(name="say", description="ให้บอทพูดข้อความในห้องเสียง (ทดสอบเสียง ElevenLabs)")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def say(inter: discord.Interaction, text: app_commands.Range[str, 1, 300]) -> None:
+    conf = settings.get(inter.guild_id)
+    if not conf.get("voice_channel_id"):
+        await inter.response.send_message("❌ ยังไม่ได้ตั้งห้องเสียง ใช้ `/ro setvoice` ก่อน", ephemeral=True)
+        return
+    if not ELEVEN_ENABLED:
+        await inter.response.send_message(
+            "❌ ยังไม่ได้ตั้งค่า ElevenLabs ใส่ `ELEVENLABS_API_KEY` และ `ELEVENLABS_VOICE_ID` ในไฟล์ .env แล้วเปิดบอทใหม่",
+            ephemeral=True,
+        )
+        return
+    ch = inter.guild.get_channel(conf["voice_channel_id"])
+    if not ch or not any(not m.bot for m in ch.members):
+        await inter.response.send_message("❌ ต้องมีคนอยู่ในห้องเสียงก่อน บอทถึงจะเข้าไปพูด", ephemeral=True)
+        return
+    await inter.response.defer(ephemeral=True, thinking=True)
+    await play_voice_alert(inter.guild, conf["voice_channel_id"], text)
+    await inter.followup.send(f"🗣️ พูดใน {ch.mention} แล้ว: {text}", ephemeral=True)
 
 
 @ro.command(name="tts", description="เปิด/ปิดข้อความอ่านออกเสียง (TTS) ตอนแจ้งเตือน")
@@ -567,7 +673,7 @@ async def test(inter: discord.Interaction) -> None:
     await inter.response.send_message(f"✅ ส่งข้อความทดสอบไปที่ {channel.mention} แล้ว", ephemeral=True)
     await play_local_sound()
     if conf.get("voice_channel_id"):
-        await play_voice_alert(inter.guild, conf["voice_channel_id"])
+        await play_voice_alert(inter.guild, conf["voice_channel_id"], speech_text(ev, 15))
 
 
 @ro.error

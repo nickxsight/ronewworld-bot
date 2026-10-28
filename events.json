@@ -1,32 +1,55 @@
 {
   "timezone": "Asia/Bangkok",
-  "default_remind_before": [15, 5],
+  "default_remind_before": [
+    15,
+    5
+  ],
   "events": [
     {
       "id": "guild_league_prelim",
       "name": "Guild League - รอบคัดเลือก/รองชนะเลิศ",
       "emoji": "⚔️",
-      "days": ["tue"],
-      "times": ["21:30", "22:00"],
+      "days": [
+        "tue"
+      ],
+      "times": [
+        "21:30",
+        "22:00"
+      ],
       "duration_min": 30,
-      "remind_before": [30, 10],
+      "remind_before": [
+        30,
+        10
+      ],
       "note": "เช็กเวลาในเกมอีกครั้ง ช่วง OBT อาจเร็วขึ้น 1 ชม."
     },
     {
       "id": "guild_league_final",
       "name": "Guild League - รอบชิงชนะเลิศ",
       "emoji": "🏆",
-      "days": ["thu"],
-      "times": ["22:00"],
+      "days": [
+        "thu"
+      ],
+      "times": [
+        "22:00"
+      ],
       "duration_min": 30,
-      "remind_before": [30, 10]
+      "remind_before": [
+        30,
+        10
+      ]
     },
     {
       "id": "rift_raid",
       "name": "Rift Raid",
       "emoji": "🌀",
-      "days": ["wed", "sun"],
-      "times": ["10:30"],
+      "days": [
+        "wed",
+        "sun"
+      ],
+      "times": [
+        "10:30"
+      ],
       "duration_min": 1110,
       "note": "เปิดถึงตี 5 ของวันถัดไป"
     },
@@ -34,18 +57,32 @@
       "id": "mimic_chest",
       "name": "Mimic Chest",
       "emoji": "📦",
-      "days": ["wed", "sat", "sun"],
-      "window": { "start": "08:00", "end": "23:00", "every_min": 30 },
+      "days": [
+        "wed",
+        "sat",
+        "sun"
+      ],
+      "window": {
+        "start": "08:00",
+        "end": "23:00",
+        "every_min": 30
+      },
       "duration_min": 20,
-      "remind_before": [5],
+      "remind_before": [
+        5
+      ],
       "note": "ปาร์ตี้ 3-5 คน"
     },
     {
       "id": "bounty_hunt",
       "name": "Bounty Hunt",
       "emoji": "🎯",
-      "days": ["mon"],
-      "times": ["12:00"],
+      "days": [
+        "mon"
+      ],
+      "times": [
+        "12:00"
+      ],
       "duration_min": 1020,
       "note": "เปิดถึงตี 5 ของวันถัดไป"
     },
@@ -53,8 +90,16 @@
       "id": "gold_heist",
       "name": "Guild Gold Heist",
       "emoji": "💰",
-      "days": ["mon", "tue", "wed", "thu", "fri"],
-      "times": ["12:00"],
+      "days": [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri"
+      ],
+      "times": [
+        "12:00"
+      ],
       "duration_min": 450,
       "note": "เปิดถึง 19:30"
     },
@@ -62,18 +107,33 @@
       "id": "luminous_vale_boss",
       "name": "Luminous Vale - บอสเกิด",
       "emoji": "🐉",
-      "days": ["sat"],
-      "times": ["09:00", "12:00", "15:00", "18:00"],
+      "days": [
+        "sat"
+      ],
+      "times": [
+        "09:00",
+        "12:00",
+        "15:00",
+        "18:00"
+      ],
       "duration_min": 30,
-      "remind_before": [15, 5],
-      "note": "แนะนำอยู่ channel 1"
+      "remind_before": [
+        15,
+        5
+      ],
+      "note": "แนะนำอยู่ channel 1",
+      "speech": "อีก {minutes} นาที บอส Luminous Vale จะเกิด รีบไปรอที่ channel 1 ได้เลย"
     },
     {
       "id": "polarity_zone",
       "name": "Polarity Zone",
       "emoji": "🧲",
-      "days": ["sun"],
-      "times": ["12:00"],
+      "days": [
+        "sun"
+      ],
+      "times": [
+        "12:00"
+      ],
       "duration_min": 540,
       "note": "เปิดถึง 21:00 หัวกิลด์เป็นคนเริ่ม (รอบละ 90 นาที)"
     },
@@ -81,10 +141,16 @@
       "id": "daily_reset",
       "name": "Daily Reset (รีเซ็ตเควสรายวัน)",
       "emoji": "🔄",
-      "days": ["daily"],
-      "times": ["00:00"],
+      "days": [
+        "daily"
+      ],
+      "times": [
+        "00:00"
+      ],
       "duration_min": 0,
-      "remind_before": [30]
+      "remind_before": [
+        30
+      ]
     }
   ]
 }

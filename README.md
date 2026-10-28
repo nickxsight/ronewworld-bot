@@ -21,6 +21,7 @@
 | `/ro week` | ตารางทั้งสัปดาห์ | ทุกคน |
 | `/ro setvoice [channel]` | ให้บอทเข้าห้องเสียงไปเล่นเสียงเตือน (ไม่ใส่ = ยกเลิก) | Manage Server |
 | `/ro tts` | เปิด/ปิดข้อความอ่านออกเสียง (TTS) | Manage Server |
+| `/ro say <ข้อความ>` | ให้บอทพูดข้อความในห้องเสียง (ทดสอบเสียง ElevenLabs) | Manage Server |
 | `/ro reload` | โหลด events.json ใหม่ | Manage Server |
 | `/ro test` | ส่งข้อความทดสอบ | Manage Server |
 
@@ -35,6 +36,25 @@
 
 ห้องเสียง: ต้องให้บอทมีสิทธิ์ Connect และ Speak ในห้องนั้น ถ้ามี `ffmpeg` ในเครื่องจะใช้ไฟล์ `alert.mp3`/`alert.wav` ถ้าไม่มีจะใช้เสียงติ๊ดในตัว
 บน Linux ต้องติดตั้ง `libopus0` ด้วย (Windows มีมาให้แล้ว)
+
+### ให้บอทพูดด้วยเสียงจริงจาก ElevenLabs
+เมื่อตั้งค่าแล้ว เวลาเตือนในห้องเสียงบอทจะพูดเป็นภาษาไทย เช่น "อีก 15 นาที กิจกรรม Guild League จะเริ่ม เตรียมตัวได้เลย"
+
+1. สมัครที่ https://elevenlabs.io (แพ็กเกจฟรีได้ 10,000 เครดิตต่อเดือน ประมาณ 10 นาทีเสียงพูด)
+2. คลิกรูปโปรไฟล์มุมซ้ายล่าง → **API Keys** → **Create API Key** → คัดลอก
+3. เมนู **Voices** → เลือกเสียงที่ชอบ (ลองฟังก่อนได้) → จุดสามจุด → **Copy Voice ID**
+4. ใส่ในไฟล์ `.env`
+   ```
+   ELEVENLABS_API_KEY=xi-xxxxxxxx
+   ELEVENLABS_VOICE_ID=xxxxxxxxxxxxxxxx
+   ELEVENLABS_MODEL=eleven_multilingual_v2
+   ```
+5. เปิดบอทใหม่ แล้ว `/ro setvoice` เลือกห้องเสียง จากนั้นลอง `/ro say สวัสดีครับ`
+
+- โมเดล `eleven_multilingual_v2` เสียงเป็นธรรมชาติที่สุด ถ้าอยากประหยัดเครดิตครึ่งหนึ่งให้ใช้ `eleven_flash_v2_5`
+- เสียงที่สร้างแล้วจะถูกแคชในโฟลเดอร์ `tts_cache` ข้อความเดิมไม่เสียเครดิตซ้ำ
+- ตั้งประโยคพูดเองต่อกิจกรรมได้ด้วยช่อง `"speech"` ใน `events.json` เช่น `"speech": "อีก {minutes} นาที บอส Luminous Vale จะเกิด รีบไป channel 1"`
+- ถ้า API key ผิดหรือเครดิตหมด บอทจะกลับไปใช้เสียงติ๊ดและแจ้งในหน้าต่าง log
 
 ## วิธีที่ง่ายที่สุด: รันบนเครื่องตัวเอง (Windows)
 1. ติดตั้ง Python จาก https://www.python.org/downloads/ (ติ๊ก **Add python.exe to PATH**)
