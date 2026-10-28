@@ -606,6 +606,14 @@ def first_run_setup() -> str:
 
 
 if __name__ == "__main__":
+    if os.name == "nt":
+        # ให้หน้าต่าง cmd แสดงภาษาไทยได้ (ตั้งจากใน Python แทนการใช้ chcp ในไฟล์ .bat)
+        os.system("chcp 65001 >nul")
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                pass
     token = TOKEN or first_run_setup()
     DEV_GUILD_ID = os.getenv("DEV_GUILD_ID") or DEV_GUILD_ID
     try:

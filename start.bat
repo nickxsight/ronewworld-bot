@@ -1,26 +1,45 @@
 @echo off
-chcp 65001 >nul
+setlocal
 title RO: The New World - Event Reminder Bot
 cd /d "%~dp0"
 
-where py >nul 2>nul && set PY=py -3
-if not defined PY where python >nul 2>nul && set PY=python
+set "PY="
+py -3 --version >nul 2>&1
+if not errorlevel 1 set "PY=py -3"
 if not defined PY (
-  echo ไม่พบ Python ในเครื่อง
-  echo กรุณาติดตั้งจาก https://www.python.org/downloads/  ^(ติ๊ก "Add python.exe to PATH" ตอนติดตั้ง^)
+  python --version >nul 2>&1
+  if not errorlevel 1 set "PY=python"
+)
+if not defined PY (
+  echo.
+  echo [ERROR] Python not found.
+  echo Install it from https://www.python.org/downloads/
+  echo and tick "Add python.exe to PATH" during setup.
+  echo.
   pause
   exit /b 1
 )
 
 if not exist ".venv\Scripts\python.exe" (
-  echo กำลังเตรียมสภาพแวดล้อมครั้งแรก...
+  echo First-time setup, please wait...
   %PY% -m venv .venv
+  if errorlevel 1 (
+    echo [ERROR] Could not create virtual environment.
+    pause
+    exit /b 1
+  )
 )
-".venv\Scripts\python.exe" -m pip install -q --upgrade pip
-".venv\Scripts\python.exe" -m pip install -q -r requirements.txt
+
+".venv\Scripts\python.exe" -m pip install -q --disable-pip-version-check -r requirements.txt
+if errorlevel 1 (
+  echo [ERROR] Could not install requirements. Check your internet connection.
+  pause
+  exit /b 1
+)
 
 echo.
-echo เริ่มบอท... ปิดหน้าต่างนี้ = บอทหยุดทำงาน
+echo Starting bot... keep this window open. Closing it stops the bot.
 echo.
-".venv\Scripts\python.exe" bot.py
+".venv\Scripts\python.exe" -X utf8 bot.py
+echo.
 pause
