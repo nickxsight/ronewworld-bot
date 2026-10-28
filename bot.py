@@ -146,7 +146,16 @@ class Settings:
             self.data = json.loads(path.read_text(encoding="utf-8"))
 
     def get(self, guild_id: int) -> dict:
-        return self.data.setdefault(str(guild_id), {"channel_id": None, "role_id": None, "disabled": []})
+        # ค่าเริ่มต้นจาก env (DEFAULT_CHANNEL_ID / DEFAULT_ROLE_ID) ใช้กับโฮสต์ฟรีที่ดิสก์ไม่ถาวร
+        # ค่าที่ตั้งด้วย /ro setchannel จะทับค่าเหล่านี้จนกว่าจะ redeploy
+        def _env_int(name: str) -> int | None:
+            v = os.getenv(name, "").strip()
+            return int(v) if v.isdigit() else None
+
+        return self.data.setdefault(
+            str(guild_id),
+            {"channel_id": _env_int("DEFAULT_CHANNEL_ID"), "role_id": _env_int("DEFAULT_ROLE_ID"), "disabled": []},
+        )
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)

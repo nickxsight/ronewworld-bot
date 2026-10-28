@@ -10,3 +10,7 @@ services:
         sync: false
       - key: PYTHON_VERSION
         value: 3.12.7
+      - key: DEFAULT_CHANNEL_ID
+        sync: false
+      - key: DEFAULT_ROLE_ID
+        sync: false
