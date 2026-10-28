@@ -22,6 +22,18 @@
 | `/ro reload` | โหลด events.json ใหม่ | Manage Server |
 | `/ro test` | ส่งข้อความทดสอบ | Manage Server |
 
+## วิธีที่ง่ายที่สุด: รันบนเครื่องตัวเอง (Windows)
+1. ติดตั้ง Python จาก https://www.python.org/downloads/ (ติ๊ก **Add python.exe to PATH**)
+2. ดาวน์โหลดโค้ดนี้เป็น ZIP (ปุ่ม Code → Download ZIP) แล้วแตกไฟล์
+3. ดับเบิลคลิก **`start.bat`** ครั้งแรกจะถามโทเคนบอท วางแล้วกด Enter เสร็จ
+4. เปิดหน้าต่างนี้ทิ้งไว้ บอทจะเตือนตามเวลา ปิดหน้าต่าง = บอทหยุด
+
+macOS / Linux ใช้ `bash start.sh` แทน
+
+**แจกเป็น .exe ให้คนที่ไม่มี Python** รัน `build_exe.bat` บน Windows หนึ่งครั้ง
+จะได้โฟลเดอร์ `dist\ro-bot-package` (มี `ro-bot.exe` + `events.json`) ส่งโฟลเดอร์นี้ให้เพื่อน
+เพื่อนแค่ดับเบิลคลิก `ro-bot.exe` แล้วใส่โทเคนของตัวเอง
+
 ## วิธีติดตั้ง
 
 ### 1. สร้างบอทใน Discord Developer Portal

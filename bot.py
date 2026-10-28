@@ -20,11 +20,14 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
-load_dotenv()
+import sys
+
+# ถ้าถูกแพ็กเป็น .exe (PyInstaller) ให้ใช้โฟลเดอร์ที่ไฟล์ .exe อยู่ เพื่อหา events.json / .env
+BASE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).parent
+load_dotenv(BASE / ".env")
 TOKEN = os.getenv("DISCORD_TOKEN")
 DEV_GUILD_ID = os.getenv("DEV_GUILD_ID")
 
-BASE = Path(__file__).parent
 EVENTS_FILE = BASE / "events.json"
 # บน Railway ให้ตั้ง SETTINGS_PATH ชี้ไปที่ Volume (เช่น /data/settings.json) เพื่อไม่ให้ค่าหายตอน redeploy
 SETTINGS_FILE = Path(os.getenv("SETTINGS_PATH", BASE / "settings.json"))
@@ -437,7 +440,35 @@ async def ro_error(inter: discord.Interaction, error: app_commands.AppCommandErr
 bot.tree.add_command(ro)
 
 
+def first_run_setup() -> str:
+    """ไม่มีโทเคน -> ถามผู้ใช้แล้วบันทึกลง .env ให้ (สำหรับคนที่รันบนเครื่องตัวเอง)"""
+    print("=" * 60)
+    print(" RO: The New World - Discord Event Reminder Bot")
+    print(" ยังไม่ได้ตั้งค่าโทเคน ทำตามนี้ครั้งเดียว:")
+    print("  1) https://discord.com/developers/applications -> New Application")
+    print("  2) เมนู Bot -> Reset Token -> คัดลอก")
+    print("  3) วางโทเคนด้านล่างแล้วกด Enter")
+    print("=" * 60)
+    token = input("DISCORD_TOKEN: ").strip()
+    if not token:
+        raise SystemExit("ไม่ได้ใส่โทเคน ปิดโปรแกรม")
+    guild = input("Guild ID ของเซิร์ฟเวอร์ (ไม่บังคับ กด Enter ข้าม): ").strip()
+    (BASE / ".env").write_text(f"DISCORD_TOKEN={token}\nDEV_GUILD_ID={guild}\n", encoding="utf-8")
+    print("บันทึกลง .env แล้ว ครั้งหน้าจะไม่ถามอีก\n")
+    os.environ["DEV_GUILD_ID"] = guild
+    return token
+
+
 if __name__ == "__main__":
-    if not TOKEN:
-        raise SystemExit("ไม่พบ DISCORD_TOKEN — คัดลอก .env.example เป็น .env แล้วใส่โทเคน")
-    bot.run(TOKEN, log_handler=None)
+    token = TOKEN or first_run_setup()
+    DEV_GUILD_ID = os.getenv("DEV_GUILD_ID") or DEV_GUILD_ID
+    try:
+        bot.run(token, log_handler=None)
+    except discord.LoginFailure:
+        (BASE / ".env").unlink(missing_ok=True)
+        print("\n❌ โทเคนไม่ถูกต้อง ลบไฟล์ .env แล้ว เปิดโปรแกรมใหม่เพื่อใส่โทเคนอีกครั้ง")
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if getattr(sys, "frozen", False) or os.name == "nt":
+            input("\nกด Enter เพื่อปิดหน้าต่าง...")
