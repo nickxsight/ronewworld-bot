@@ -7,9 +7,14 @@ Discord Bot แจ้งเตือนเวลากิจกรรม Ragnaro
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
+import math
 import os
+import shutil
+import struct
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, time as dtime
 from pathlib import Path
@@ -157,7 +162,13 @@ class Settings:
 
         return self.data.setdefault(
             str(guild_id),
-            {"channel_id": _env_int("DEFAULT_CHANNEL_ID"), "role_id": _env_int("DEFAULT_ROLE_ID"), "disabled": []},
+            {
+                "channel_id": _env_int("DEFAULT_CHANNEL_ID"),
+                "role_id": _env_int("DEFAULT_ROLE_ID"),
+                "voice_channel_id": _env_int("DEFAULT_VOICE_CHANNEL_ID"),
+                "tts": False,
+                "disabled": [],
+            },
         )
 
     def save(self) -> None:
@@ -196,6 +207,102 @@ def event_embed(ev: Event, start: datetime, minutes_left: int) -> discord.Embed:
     return emb
 
 
+# ---------------------------------------------------------------- เสียงแจ้งเตือน
+ALERT_FILE = next((BASE / n for n in ("alert.mp3", "alert.wav", "alert.ogg") if (BASE / n).exists()), None)
+LOCAL_SOUND = os.getenv("LOCAL_SOUND", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _tone_pcm(seconds: float = 2.0, freq: int = 880, rate: int = 48000) -> bytes:
+    """สร้างเสียงติ๊ด ๆ เป็น PCM 16-bit stereo 48kHz (รูปแบบที่ Discord ต้องการ) โดยไม่ต้องใช้ ffmpeg"""
+    out = bytearray()
+    for i in range(int(seconds * rate)):
+        t = i / rate
+        on = int(t * 4) % 2 == 0  # ดัง 0.25 วิ เว้น 0.25 วิ
+        v = int(11000 * math.sin(2 * math.pi * freq * t)) if on else 0
+        out += struct.pack("<hh", v, v)
+    return bytes(out)
+
+
+_TONE_CACHE = _tone_pcm()
+
+
+def _voice_source() -> discord.AudioSource:
+    if ALERT_FILE and shutil.which("ffmpeg"):
+        return discord.FFmpegPCMAudio(str(ALERT_FILE))
+    return discord.PCMAudio(io.BytesIO(_TONE_CACHE))
+
+
+def _play_local_sound_blocking() -> None:
+    """เสียงบนคอมที่รันบอท (ไม่ใช่ใน Discord)"""
+    if os.name == "nt":
+        import winsound  # มีเฉพาะ Windows
+
+        if ALERT_FILE and ALERT_FILE.suffix == ".wav":
+            winsound.PlaySound(str(ALERT_FILE), winsound.SND_FILENAME)
+        else:
+            for _ in range(3):
+                winsound.Beep(880, 180)
+                winsound.Beep(1175, 180)
+    elif sys.platform == "darwin":
+        subprocess.run(["afplay", str(ALERT_FILE or "/System/Library/Sounds/Glass.aiff")], check=False)
+    else:
+        player = shutil.which("paplay") or shutil.which("aplay")
+        if player and ALERT_FILE and ALERT_FILE.suffix == ".wav":
+            subprocess.run([player, str(ALERT_FILE)], check=False)
+        else:
+            print("\a", end="", flush=True)
+
+
+async def play_local_sound() -> None:
+    if not LOCAL_SOUND:
+        return
+    try:
+        await asyncio.to_thread(_play_local_sound_blocking)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("เล่นเสียงบนเครื่องไม่ได้: %s", exc)
+
+
+async def play_voice_alert(guild: discord.Guild, voice_channel_id: int) -> None:
+    """เข้าห้องเสียง เล่นเสียงเตือน แล้วออก"""
+    ch = guild.get_channel(voice_channel_id)
+    if not isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+        return
+    if not any(not m.bot for m in ch.members):
+        return  # ไม่มีคนอยู่ในห้องเสียง ไม่ต้องเข้า
+    if not discord.opus.is_loaded():
+        try:
+            discord.opus._load_default()
+        except Exception:  # noqa: BLE001
+            pass
+    if not discord.opus.is_loaded():
+        log.warning("ไม่พบ libopus เล่นเสียงในห้องเสียงไม่ได้ (Linux: sudo apt install libopus0)")
+        return
+    vc = guild.voice_client
+    try:
+        if vc is None or not vc.is_connected():
+            vc = await ch.connect(timeout=15, self_deaf=True)
+        elif vc.channel.id != ch.id:
+            await vc.move_to(ch)
+        if vc.is_playing():
+            vc.stop()
+        done = asyncio.Event()
+        vc.play(_voice_source(), after=lambda _e: bot.loop.call_soon_threadsafe(done.set))
+        await asyncio.wait_for(done.wait(), timeout=30)
+        await asyncio.sleep(0.5)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("เล่นเสียงในห้องเสียง %s ไม่ได้: %s", ch.name, exc)
+    finally:
+        vc = guild.voice_client
+        if vc and vc.is_connected():
+            await vc.disconnect(force=True)
+
+
+def tts_text(ev: Event, minutes_left: int) -> str:
+    if minutes_left <= 0:
+        return f"{ev.name} เริ่มแล้ว"
+    return f"อีก {minutes_left} นาที {ev.name} จะเริ่ม"
+
+
 @tasks.loop(seconds=30)
 async def reminder_loop() -> None:
     now = schedule.now()
@@ -228,9 +335,15 @@ async def reminder_loop() -> None:
                         embed=event_embed(ev, start, before),
                         allowed_mentions=discord.AllowedMentions(roles=True),
                     )
+                    if conf.get("tts"):
+                        await channel.send(tts_text(ev, before), tts=True, delete_after=120)
                     log.info("แจ้งเตือน %s (%s นาที) -> %s/%s", ev.name, before, guild.name, channel.name)
                 except discord.HTTPException as exc:
                     log.warning("ส่งข้อความไม่ได้ใน %s: %s", guild.name, exc)
+                    continue
+                await play_local_sound()
+                if conf.get("voice_channel_id"):
+                    asyncio.create_task(play_voice_alert(guild, conf["voice_channel_id"]))
     # ล้าง key เก่าไม่ให้โตไม่สิ้นสุด
     if len(sent_keys) > 5000:
         sent_keys.clear()
@@ -302,6 +415,34 @@ async def setrole(inter: discord.Interaction, role: discord.Role | None = None) 
     settings.save()
     msg = f"✅ จะแท็ก {role.mention} เวลาแจ้งเตือน" if role else "✅ ยกเลิกการแท็กยศแล้ว"
     await inter.response.send_message(msg, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+
+@ro.command(name="setvoice", description="ตั้งห้องเสียงให้บอทเข้าไปเล่นเสียงเตือน (ไม่ใส่ = ยกเลิก)")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def setvoice(inter: discord.Interaction, channel: discord.VoiceChannel | None = None) -> None:
+    conf = settings.get(inter.guild_id)
+    conf["voice_channel_id"] = channel.id if channel else None
+    settings.save()
+    if channel:
+        perms = channel.permissions_for(inter.guild.me)
+        warn = "" if (perms.connect and perms.speak) else "\n⚠️ บอทยังไม่มีสิทธิ์ Connect/Speak ในห้องนี้"
+        msg = f"✅ จะเข้า {channel.mention} เพื่อเล่นเสียงเตือน (เฉพาะตอนมีคนอยู่ในห้อง){warn}"
+    else:
+        msg = "✅ ยกเลิกเสียงเตือนในห้องเสียงแล้ว"
+    await inter.response.send_message(msg, ephemeral=True)
+
+
+@ro.command(name="tts", description="เปิด/ปิดข้อความอ่านออกเสียง (TTS) ตอนแจ้งเตือน")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def tts(inter: discord.Interaction) -> None:
+    conf = settings.get(inter.guild_id)
+    conf["tts"] = not conf.get("tts", False)
+    settings.save()
+    state = "เปิด 🔊" if conf["tts"] else "ปิด 🔇"
+    await inter.response.send_message(
+        f"{state} TTS แล้ว (ผู้ฟังต้องเปิด Text-to-Speech ใน Discord: Settings > Accessibility > Allow playback)",
+        ephemeral=True,
+    )
 
 
 async def _event_choices(inter: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
@@ -421,7 +562,12 @@ async def test(inter: discord.Interaction) -> None:
     mention = f"<@&{conf['role_id']}> " if conf.get("role_id") else ""
     await channel.send(content=mention or None, embed=event_embed(ev, start, 15),
                        allowed_mentions=discord.AllowedMentions(roles=True))
+    if conf.get("tts"):
+        await channel.send(tts_text(ev, 15), tts=True, delete_after=120)
     await inter.response.send_message(f"✅ ส่งข้อความทดสอบไปที่ {channel.mention} แล้ว", ephemeral=True)
+    await play_local_sound()
+    if conf.get("voice_channel_id"):
+        await play_voice_alert(inter.guild, conf["voice_channel_id"])
 
 
 @ro.error

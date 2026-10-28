@@ -8,6 +8,7 @@ if errorlevel 1 ( echo build ล้มเหลว & pause & exit /b 1 )
 mkdir dist\ro-bot-package 2>nul
 copy /y dist\ro-bot.exe dist\ro-bot-package\ >nul
 copy /y events.json dist\ro-bot-package\ >nul
+copy /y alert.wav dist\ro-bot-package\ >nul
 copy /y README.md dist\ro-bot-package\ >nul
 echo.
 echo เสร็จแล้ว: แจกโฟลเดอร์ dist\ro-bot-package ^(มี ro-bot.exe + events.json^)
