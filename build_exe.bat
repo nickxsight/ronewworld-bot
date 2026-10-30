@@ -13,6 +13,7 @@ if not exist "dist\ro-bot-package" mkdir "dist\ro-bot-package"
 copy /y "dist\ro-bot.exe" "dist\ro-bot-package\" >nul
 copy /y "events.json" "dist\ro-bot-package\" >nul
 copy /y "alert.wav" "dist\ro-bot-package\" >nul
+xcopy /e /i /y "sounds" "dist\ro-bot-package\sounds" >nul
 copy /y "INSTALL.md" "dist\ro-bot-package\" >nul
 echo.
 echo Done: share the folder dist\ro-bot-package (ro-bot.exe + events.json + alert.wav)

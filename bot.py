@@ -57,6 +57,7 @@ class Event:
     remind_before: list[int] = field(default_factory=list)
     note: str = ""
     speech: str = ""
+    sound: str = ""  # ไฟล์เสียงเฉพาะกิจกรรม เช่น sounds/guild_league.wav
 
     def occurrences_on(self, day: datetime) -> list[datetime]:
         """คืนเวลาเริ่มทั้งหมดของกิจกรรมในวันที่กำหนด (timezone-aware)"""
@@ -118,6 +119,7 @@ class Schedule:
                     remind_before=sorted(set(int(x) for x in e.get("remind_before", default_before)), reverse=True),
                     note=e.get("note", ""),
                     speech=e.get("speech", ""),
+                    sound=e.get("sound", ""),
                 )
             )
         self.events = events
@@ -228,38 +230,118 @@ def _tone_pcm(seconds: float = 2.0, freq: int = 880, rate: int = 48000) -> bytes
 _TONE_CACHE = _tone_pcm()
 
 
+_WAV_CACHE: dict[tuple[str, float], bytes] = {}
+
+
+def load_wav_as_pcm48(path: Path) -> bytes | None:
+    """อ่านไฟล์ .wav (8/16/24/32-bit, mono/stereo, ทุก sample rate) แล้วแปลงเป็น PCM 48kHz stereo 16-bit
+    ทำเองใน Python ล้วน ไม่ต้องมี ffmpeg เพื่อให้คนอัดเสียงเองแล้ววางไฟล์ได้เลย"""
+    import wave
+
+    try:
+        key = (str(path), path.stat().st_mtime)
+        if key in _WAV_CACHE:
+            return _WAV_CACHE[key]
+        with wave.open(str(path), "rb") as w:
+            ch, sw, rate, n = w.getnchannels(), w.getsampwidth(), w.getframerate(), w.getnframes()
+            raw = w.readframes(n)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("อ่านไฟล์เสียง %s ไม่ได้ (ต้องเป็น WAV แบบ PCM): %s", path.name, exc)
+        return None
+    count = len(raw) // sw
+    if sw == 2:
+        vals = struct.unpack(f"<{count}h", raw[: count * 2])
+    elif sw == 1:
+        vals = [(b - 128) << 8 for b in raw]
+    elif sw == 3:
+        vals = [int.from_bytes(raw[i : i + 3], "little", signed=True) >> 8 for i in range(0, count * 3, 3)]
+    elif sw == 4:
+        vals = [v >> 16 for v in struct.unpack(f"<{count}i", raw[: count * 4])]
+    else:
+        log.warning("ไฟล์ %s ใช้ความละเอียด %d-bit ที่ไม่รองรับ", path.name, sw * 8)
+        return None
+    # รวมช่องเสียงเป็น mono
+    if ch > 1:
+        mono = [sum(vals[i : i + ch]) // ch for i in range(0, len(vals) - ch + 1, ch)]
+    else:
+        mono = list(vals)
+    if not mono:
+        return None
+    # resample เป็น 48kHz แบบ linear interpolation
+    out = bytearray()
+    if rate == 48000:
+        for v in mono:
+            out += struct.pack("<hh", v, v)
+    else:
+        step = rate / 48000
+        total = int(len(mono) * 48000 / rate)
+        last = len(mono) - 1
+        for i in range(total):
+            pos = i * step
+            j = int(pos)
+            a = mono[j]
+            b = mono[j + 1] if j < last else a
+            v = int(a + (b - a) * (pos - j))
+            out += struct.pack("<hh", v, v)
+    pcm = bytes(out)
+    _WAV_CACHE[key] = pcm
+    return pcm
+
+
+def resolve_sound_file(name: str | None) -> Path | None:
+    """หาไฟล์เสียง: ชื่อที่ตั้งในกิจกรรม (relative กับโฟลเดอร์บอท) หรือ alert.wav/mp3 กลาง"""
+    if name:
+        f = (BASE / name).resolve()
+        if f.exists():
+            return f
+        log.warning("ไม่พบไฟล์เสียง %s", name)
+    return ALERT_FILE
+
+
+def file_audio_source(path: Path | None) -> discord.AudioSource | None:
+    """สร้าง AudioSource จากไฟล์: .wav อ่านเอง ไฟล์อื่น (.mp3/.ogg/.m4a) ต้องมี ffmpeg"""
+    if not path:
+        return None
+    if path.suffix.lower() == ".wav":
+        pcm = load_wav_as_pcm48(path)
+        return discord.PCMAudio(io.BytesIO(pcm)) if pcm else None
+    if shutil.which("ffmpeg"):
+        return discord.FFmpegPCMAudio(str(path))
+    log.warning("ไฟล์ %s ต้องมี ffmpeg ถึงจะเล่นได้ ให้แปลงเป็น .wav แทน", path.name)
+    return None
+
+
 def _voice_source() -> discord.AudioSource:
-    if ALERT_FILE and shutil.which("ffmpeg"):
-        return discord.FFmpegPCMAudio(str(ALERT_FILE))
-    return discord.PCMAudio(io.BytesIO(_TONE_CACHE))
+    return file_audio_source(ALERT_FILE) or discord.PCMAudio(io.BytesIO(_TONE_CACHE))
 
 
-def _play_local_sound_blocking() -> None:
+def _play_local_sound_blocking(sound_file: Path | None) -> None:
     """เสียงบนคอมที่รันบอท (ไม่ใช่ใน Discord)"""
+    f = sound_file or ALERT_FILE
     if os.name == "nt":
         import winsound  # มีเฉพาะ Windows
 
-        if ALERT_FILE and ALERT_FILE.suffix == ".wav":
-            winsound.PlaySound(str(ALERT_FILE), winsound.SND_FILENAME)
+        if f and f.suffix.lower() == ".wav":
+            winsound.PlaySound(str(f), winsound.SND_FILENAME)
         else:
             for _ in range(3):
                 winsound.Beep(880, 180)
                 winsound.Beep(1175, 180)
     elif sys.platform == "darwin":
-        subprocess.run(["afplay", str(ALERT_FILE or "/System/Library/Sounds/Glass.aiff")], check=False)
+        subprocess.run(["afplay", str(f or "/System/Library/Sounds/Glass.aiff")], check=False)
     else:
         player = shutil.which("paplay") or shutil.which("aplay")
-        if player and ALERT_FILE and ALERT_FILE.suffix == ".wav":
-            subprocess.run([player, str(ALERT_FILE)], check=False)
+        if player and f and f.suffix.lower() == ".wav":
+            subprocess.run([player, str(f)], check=False)
         else:
             print("\a", end="", flush=True)
 
 
-async def play_local_sound() -> None:
+async def play_local_sound(sound_file: Path | None = None) -> None:
     if not LOCAL_SOUND:
         return
     try:
-        await asyncio.to_thread(_play_local_sound_blocking)
+        await asyncio.to_thread(_play_local_sound_blocking, sound_file)
     except Exception as exc:  # noqa: BLE001
         log.debug("เล่นเสียงบนเครื่องไม่ได้: %s", exc)
 
@@ -344,7 +426,10 @@ async def _play_and_wait(vc: discord.VoiceClient, source: discord.AudioSource, t
     await asyncio.wait_for(done.wait(), timeout=timeout)
 
 
-async def play_voice_alert(guild: discord.Guild, voice_channel_id: int, speech: str | None = None) -> None:
+async def play_voice_alert(
+    guild: discord.Guild, voice_channel_id: int, speech: str | None = None, sound_file: Path | None = None
+) -> None:
+    """ลำดับเสียงที่เล่น: ไฟล์เสียงของกิจกรรม > เสียงพูด ElevenLabs > alert.wav กลาง > เสียงติ๊ด"""
     """เข้าห้องเสียง เล่นเสียงเตือน แล้วออก"""
     ch = guild.get_channel(voice_channel_id)
     if not isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
@@ -367,8 +452,11 @@ async def play_voice_alert(guild: discord.Guild, voice_channel_id: int, speech: 
             await vc.move_to(ch)
         if vc.is_playing():
             vc.stop()
-        pcm = await eleven_tts_pcm(speech) if speech else None
-        if pcm:
+        custom = file_audio_source(sound_file) if sound_file else None
+        pcm = None if custom else (await eleven_tts_pcm(speech) if speech else None)
+        if custom:
+            await _play_and_wait(vc, custom)
+        elif pcm:
             await _play_and_wait(vc, discord.PCMAudio(io.BytesIO(_TONE_CACHE[: 48000 * 4 // 2])), timeout=10)  # ติ๊ดสั้น 0.5 วิ
             await asyncio.sleep(0.3)
             await _play_and_wait(vc, discord.PCMAudio(io.BytesIO(pcm)))
@@ -427,9 +515,12 @@ async def reminder_loop() -> None:
                 except discord.HTTPException as exc:
                     log.warning("ส่งข้อความไม่ได้ใน %s: %s", guild.name, exc)
                     continue
-                await play_local_sound()
+                ev_sound = (BASE / ev.sound) if ev.sound and (BASE / ev.sound).exists() else None
+                await play_local_sound(ev_sound)
                 if conf.get("voice_channel_id"):
-                    asyncio.create_task(play_voice_alert(guild, conf["voice_channel_id"], speech_text(ev, before)))
+                    asyncio.create_task(
+                        play_voice_alert(guild, conf["voice_channel_id"], speech_text(ev, before), ev_sound)
+                    )
     # ล้าง key เก่าไม่ให้โตไม่สิ้นสุด
     if len(sent_keys) > 5000:
         sent_keys.clear()
@@ -466,6 +557,7 @@ async def _wait_ready() -> None:
 @bot.event
 async def on_ready() -> None:
     log.info("ล็อกอินเป็น %s (%s)", bot.user, bot.user.id)
+    log.info("ไฟล์เสียงเตือนกลาง: %s", ALERT_FILE.name if ALERT_FILE else "ไม่มี (ใช้เสียงติ๊ดในตัว)")
     log.info("ElevenLabs: %s", f"เปิดใช้ (voice {ELEVEN_VOICE_ID}, model {ELEVEN_MODEL})" if ELEVEN_ENABLED else "ปิด (ไม่มี API key/voice id)")
     try:
         if DEV_GUILD_ID:
@@ -681,9 +773,10 @@ async def test(inter: discord.Interaction) -> None:
     if conf.get("tts"):
         await channel.send(tts_text(ev, 15), tts=True, delete_after=120)
     await inter.response.send_message(f"✅ ส่งข้อความทดสอบไปที่ {channel.mention} แล้ว", ephemeral=True)
-    await play_local_sound()
+    ev_sound = (BASE / ev.sound) if ev.sound and (BASE / ev.sound).exists() else None
+    await play_local_sound(ev_sound)
     if conf.get("voice_channel_id"):
-        await play_voice_alert(inter.guild, conf["voice_channel_id"], speech_text(ev, 15))
+        await play_voice_alert(inter.guild, conf["voice_channel_id"], speech_text(ev, 15), ev_sound)
 
 
 @ro.error
